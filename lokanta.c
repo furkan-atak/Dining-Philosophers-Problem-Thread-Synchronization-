@@ -4,15 +4,12 @@
 #include <semaphore.h>
 #include <time.h>
 #include <unistd.h>
-double priceTableOpen = 99.90;
+double tableOpenCost = 99.90;
 double priceTableReopen = 19.90;
-double ricePrice = 5;
+double riceCost = 20;
 int philCount = 0;
 
 #define tableRiceAmount 2000
-#define priorityLevelMax 5
-#define thingTimeMax 5
-#define eatingTimeMax 2
 #define eatingRiceQuantity 100
 #define tableCount 10
 #define capacity 80
@@ -23,7 +20,6 @@ enum {THINKING, EATING};
 typedef struct Philosopher
 {
     int id;
-    int priorityLevel;
     int thinkingTime;
     int eatingTime;
     int tableNumber;
@@ -40,7 +36,7 @@ typedef struct Table
     int reOrderAmount;
     int eatenRiceAmount;
     int chairCount;
-    int emptyChairCount;
+    int chairRemaining;
     int finishedCount;
     int opened;
     int* philAtChairs;
@@ -52,7 +48,7 @@ typedef struct Table
 }Table;
 
 pthread_mutex_t printReceiptLock;
-pthread_mutex_t findTableLock;
+pthread_mutex_t sitToTableLock;
 
 sem_t enterRestaurantLock;
 
@@ -61,23 +57,18 @@ Table* tableList;
 
 int restaurantCapacity;
 
-void* enterRestaurant(void*);
-void* sit(int);
-void* eat(int);
-void* think(int);
-void* getHungry(int);
-void dining(int); // implementing
-void startDining(Table*); // remove if not in usage
+void* enterTheRestaurant(void*); // done
+void eat(int); // done
+void think(int); // done
 int numOfHungryAtTable(Table); // done
-void tableReceipt(Table); // done
+void tableBill(Table); // done
 void reOrder(Table*); // done
 void openTable(Table*); // done
-void prepareTable(Table*);
 Table createTable(int); // done
 void printPhil(Philosopher); // done
 Philosopher createPhil(int); // done
 void printTable(Table); // done
-int findTable(int);
+int sitToTable(int); // done
 
 void* enterRestaurant(void* i) {
     
@@ -85,39 +76,91 @@ void* enterRestaurant(void* i) {
 
     printf(" Philosopher:%d  is trying to enter.. \n", id);
     sem_wait(&enterRestaurantLock);  // if under capacity (80) enter the restaurant
-
-    pthread_mutex_lock(&findTableLock); // lock until finding table
-    int tableId = findTable(id); // find table by given philosopher Id
-    pthread_mutex_unlock(&findTableLock);
+    
+    pthread_mutex_lock(&sitToTableLock); // lock until finding table
+    sleep(0.5);
+    int tableId = sitToTable(id); // find table by given philosopher Id
+    pthread_mutex_unlock(&sitToTableLock);
 
     pthread_mutex_lock(&tableList[tableId].fullLock);
-    sleep(1);
-    printf(" @@@@@@@@%d  CHAIR COUNT@@@@@@@\n", tableList[tableId].emptyChairCount);
-    if(tableList[tableId].emptyChairCount == 0) {
-        Table table = tableList[tableId];
-        printTable(table);
+    sleep(3);
+    printf(" @@@@@@@@%d  CHAIR COUNT@@@@@@@\n", tableList[tableId].chairRemaining); 
+    if(tableList[tableId].chairRemaining == 0) {
         
-        int i;
+        printTable(tableList[tableId]);
+        
+        if(!tableList[tableId].opened) {
+            openTable(&tableList[tableId]);
+            printf("TABLE OPENED\n");
+        }
+        
 
-        // for(i = 0; i < table.chairCount; i++){
-        //     pthread_mutex_unlock(&philList[table.philAtChairs[i]].lock);
-        // }
-        pthread_mutex_lock(&tableList[tableId].fullLock);
+        int i;
+        for(i = 0; i < tableList[tableId].chairCount; i++){
+                  // while has issues.
+
+                sleep(philList[tableList[tableId].philAtChairs[i]].eatingTime);
+                pthread_mutex_lock(&tableList[tableId].eatLock);
+                eat(tableList[tableId].philAtChairs[i]);
+                printf("philosopher:%d ate %d gr rice and eaten %d in the table, %d-table has %d amountrice \n",
+                 philList[tableList[tableId].philAtChairs[i]].id, philList[tableList[tableId].philAtChairs[i]].eatenRiceAmount,
+                 tableList[tableId].eatenRiceAmount, tableList[tableId].id,tableList[tableId].riceAmount);
+                pthread_mutex_unlock(&tableList[tableId].eatLock);
+                
+                sleep(philList[tableList[tableId].philAtChairs[i]].thinkingTime);
+                pthread_mutex_lock(&tableList[tableId].finishLock);
+                think(tableList[tableId].philAtChairs[i]);
+                pthread_mutex_unlock(&tableList[tableId].finishLock);
+                
+                // if(numOfHungryAtTable(tableList[tableId]) > 0 ) {
+                //     reOrder(&tableList[tableId]);
+
+                // }
+            
+        }
+        
+      //  pthread_mutex_unlock(&tableList[tableId].fullLock);
     }
     sem_post(&enterRestaurantLock);
+    sleep(5);
 }
 
-int findTable(int id) {
+void eat(int id) {
+
+    Philosopher *phil = &philList[id];
+    Table *table = &tableList[phil->tableNumber];
+    if(table->riceAmount <= 0) {
+        return;
+    }
+    phil->eatenRiceAmount += 100;
+    phil->status = EATING;
+    table->riceAmount = table->riceAmount - 100;
+    table->eatenRiceAmount += 100;
+
+}
+
+void think(int id) {
+    Philosopher *phil = &philList[id];
+    phil->eatenRiceAmount += 100;
+    phil->status = THINKING;
+}
+
+int sitToTable(int id) {
     int theTable = -1;
     int i;
     int j;
     for (i = 0; i < tableCount; i++) {
         for(j = 0; j < tableList->chairCount; j++) {
             if(tableList[i].philAtChairs[j] == 0) {
+                tableList[i].chairRemaining = tableList[i].chairRemaining-1 >= 0 ? tableList[i].chairRemaining-1 : -1;
+                if (tableList[i].chairRemaining  == -1) { 
+                    tableList[i].chairRemaining = 0; 
+                    continue;
+                }
                 tableList[i].philAtChairs[j] = id;
-                tableList[i].emptyChairCount = tableList[i].emptyChairCount-1;
+                philList[tableList[i].philAtChairs[j]].tableNumber = tableList[i].id;
                 theTable = tableList[i].id;
-                printf("Philosopher:%d is sittin to Table:%d and Table has %d chairs more\n", id, theTable, tableList[i].emptyChairCount);
+                printf("Philosopher:%d is sittin to Table:%d and Table has %d chairs more\n", id, theTable, tableList[i].chairRemaining);
                 return theTable;
             }
         } 
@@ -128,7 +171,7 @@ int findTable(int id) {
 
 void reOrder(Table* table) {
     table->riceAmount = tableRiceAmount; // reordering 
-    table->receipt += ricePrice;
+    table->receipt += riceCost;
     table->receipt += priceTableReopen;
     table->eatenRiceAmount += 2;
     table->reOrderAmount += 1;
@@ -140,7 +183,6 @@ Philosopher createPhil(int id) {
     phil.eatingTime = (rand() % 5) + 1; 
     phil.thinkingTime = (rand() % 5) + 1;
     phil.id = id;
-    phil.priorityLevel = (rand() % 5) + 1; 
     phil.status = -1;
     phil.tableNumber = -1;
     pthread_mutex_init(&phil.lock, NULL); // philosopher lock initializing.
@@ -151,7 +193,7 @@ Table createTable(int id) {
     Table t;
     t.id = id;
     t.eatenRiceAmount = 0;
-    t.emptyChairCount = 8;
+    t.chairRemaining = 8;
     t.finishedCount = 0;
     t.opened = 0;
     t.receipt = 0.0;
@@ -167,12 +209,13 @@ Table createTable(int id) {
 }
 
 void openTable(Table* table) {
-    table->emptyChairCount = 8;
+    table->chairRemaining = 8;
     table->riceAmount = 2000;
     table->opened = 1;
-    table->philAtChairs = (int*)calloc(8, sizeof(int));
     table->reOrderAmount = 0;
     table->finishedCount = 0;
+    table->receipt = tableOpenCost + riceCost;
+
 }
 
 int numOfHungryAtTable(Table table){
@@ -187,21 +230,17 @@ int numOfHungryAtTable(Table table){
     return numOfHungry;
 }
 
-void dining(int philId) {
-    // code
-}
-
 void printPhil(Philosopher phil) {
-    printf("%d-Philosopher | priority:%d | thinkingTime:%d | tableNumber:%d | status:%d | eatenRice:%d \n",
-    phil.id, phil.priorityLevel, phil.thinkingTime, phil.tableNumber, phil.status, phil.eatenRiceAmount);
+    printf("%d-Philosopher | thinkingTime:%d | tableNumber:%d | status:%d | eatenRice:%d \n",
+    phil.id, phil.thinkingTime, phil.tableNumber, phil.status, phil.eatenRiceAmount);
 }
 
 void printTable(Table table) {
-    printf("%d-Table | chairCount:%d | riceAmount:%d | emptyChairCount:%d \n", table.id, table.chairCount,
-    table.riceAmount, table.emptyChairCount);
+    printf("%d-Table | chairCount:%d | riceAmount:%d | chairRemaining:%d \n", table.id, table.chairCount,
+    table.riceAmount, table.chairRemaining);
 }
 
-void tableReceipt (Table table) {
+void tableBill (Table table) {
     pthread_mutex_lock(&printReceiptLock);
     printf("*** Table %d Receipt ***\n", table.id);
     int i = 0;
@@ -209,8 +248,7 @@ void tableReceipt (Table table) {
         Philosopher phil = philList[table.philAtChairs[i]];
         printf("Philosopher: %d eat: %d \n", phil.id, phil.eatenRiceAmount);
     }    
-    printf("Eaten Rice: %d kg \n", table.eatenRiceAmount);
-    printf("Eaten Rice %d g \n", table.eatenRiceAmount *1000);
+    printf("Eaten Rice In Table: %d g \n", table.eatenRiceAmount);
     printf("reOrder Count: %d \n", table.reOrderAmount);
     printf("Total cost: %f \n", table.receipt);
     printf("------------ ||| ------------\n");
@@ -226,7 +264,7 @@ int main(int argc, char const *argv[])
     
     sem_init(&enterRestaurantLock, 0, capacity); // tek seferde restoran kapasitesi kadar kişi içeri girer
     
-    pthread_mutex_init(&findTableLock, NULL);
+    pthread_mutex_init(&sitToTableLock, NULL);
     pthread_mutex_init(&printReceiptLock, NULL);
     
     tableList = (Table*)calloc(sizeof(Table), tableCount);
@@ -252,6 +290,8 @@ int main(int argc, char const *argv[])
     for(l = 0; l < philCount; l++){
         pthread_join(philList[l].philThread, NULL);
     }
+    
+
     /* code */
     return 0;
 }
