@@ -1,3 +1,3 @@
 # Dining Philosophers
 
-Thread synchronization using semaphore and mutex lock for dining philosphers problem. 
+Thread synchronization using semaphore and mutex lock for dining philosophers problem. 
